@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<title>배변 기록</title>
+
+<!-- iPhone / iOS 홈 화면 앱처럼 실행되도록 하는 설정 -->
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="배변 기록" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="theme-color" content="#2F5233" />
+<link rel="apple-touch-icon" href="icon-180.png" />
+<link rel="icon" href="icon-192.png" />
+
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+<style>
+  html, body { margin:0; padding:0; background:#EEF1E9; }
+  #root { min-height:100dvh; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useRef } = React;
+
+/* ---------------------------------------------------------
+   배변 기록 앱 (독립 실행 버전) — 데이터: 이 기기의 localStorage
+--------------------------------------------------------- */
+
+const TYPE_META = [
+  { id: 1, title: "산양 똥 모양", tag: "심한 변비", desc: "딱딱하고 동그란 덩어리가 따로따로", color: "var(--s1)" },
+  { id: 2, title: "울퉁불퉁한 소시지 모양", tag: "변비 경향", desc: "덩어리가 붙어 있지만 표면이 울퉁불퉁", color: "var(--s2)" },
+  { id: 3, title: "표면이 갈라진 소시지 모양", tag: "정상", desc: "소시지 모양이지만 표면에 균열이 있음", color: "var(--s3)" },
+  { id: 4, title: "매끄러운 소시지 모양", tag: "이상적", desc: "부드럽고 매끈한 소시지·뱀 모양", color: "var(--s4)" },
+  { id: 5, title: "부드러운 덩어리", tag: "약간 무름", desc: "경계가 뚜렷한 부드러운 덩어리 여러 개", color: "var(--s5)" },
+  { id: 6, title: "걸쭉하고 흐물흐물함", tag: "묽은 변", desc: "경계가 불분명한 부드러운 조각들", color: "var(--s6)" },
+  { id: 7, title: "물 같은 상태", tag: "심한 설사", desc: "고형물이 없는 완전히 물 같은 상태", color: "var(--s7)" },
+];
+
+const typeById = (id) => TYPE_META.find((t) => t.id === id);
+
+const pad = (n) => String(n).padStart(2, "0");
+const localDateStr = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const localTimeStr = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
+
+function koreanDate(dateKey) {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  return `${m}월 ${d}일 (${WEEKDAYS[dt.getDay()]})`;
+}
+
+function koreanTime(timeStr) {
+  const [h, m] = timeStr.split(":").map(Number);
+  const period = h < 12 ? "오전" : "오후";
+  let h12 = h % 12;
+  if (h12 === 0) h12 = 12;
+  return `${period} ${h12}:${pad(m)}`;
+}
+
+function minutesOf(timeStr) {
+  const [h, m] = timeStr.split(":").map(Number);
+  return h * 60 + m;
+}
+
+/* ---------------- icons ---------------- */
+
+function TypeIcon({ type, size = 26 }) {
+  const c = { width: size, height: size, viewBox: "0 0 48 48" };
+  switch (type) {
+    case 1:
+      return (
+        <svg {...c}>
+          <circle cx="10" cy="26" r="6.5" fill="currentColor" />
+          <circle cx="24" cy="20" r="6.5" fill="currentColor" />
+          <circle cx="38" cy="26" r="6.5" fill="currentColor" />
+        </svg>
+      );
+    case 2:
+      return (
+        <svg {...c}>
+          <ellipse cx="24" cy="24" rx="19" ry="8.5" fill="currentColor" />
+          <circle cx="12" cy="22" r="2.6" fill="rgba(0,0,0,.18)" />
+          <circle cx="24" cy="27" r="2.6" fill="rgba(0,0,0,.18)" />
+          <circle cx="36" cy="22" r="2.6" fill="rgba(0,0,0,.18)" />
+        </svg>
+      );
+    case 3:
+      return (
+        <svg {...c}>
+          <rect x="5" y="18" width="38" height="12" rx="6" fill="currentColor" />
+          <line x1="15" y1="18" x2="13" y2="30" stroke="rgba(0,0,0,.22)" strokeWidth="2" />
+          <line x1="25" y1="18" x2="23" y2="30" stroke="rgba(0,0,0,.22)" strokeWidth="2" />
+          <line x1="35" y1="18" x2="33" y2="30" stroke="rgba(0,0,0,.22)" strokeWidth="2" />
+        </svg>
+      );
+    case 4:
+      return (
+        <svg {...c}>
+          <rect x="4" y="19" width="40" height="10" rx="5" fill="currentColor" />
+        </svg>
+      );
+    case 5:
+      return (
+        <svg {...c}>
+          <circle cx="13" cy="27" r="8" fill="currentColor" />
+          <circle cx="29" cy="21" r="9" fill="currentColor" />
+          <circle cx="40" cy="28" r="5.5" fill="currentColor" />
+        </svg>
+      );
+    case 6:
+      return (
+        <svg {...c}>
+          <path
+            d="M8 27c-1-6 4-10 9-9 2-5 10-6 13-1 5-2 12 2 10 8 4 2 3 9-3 9-6 2-13 1-18-2-6 2-12-1-11-5z"
+            fill="currentColor"
+          />
+        </svg>
+      );
+    case 7:
+      return (
+        <svg {...c}>
+          <path d="M4 17 Q10 13 16 17 T28 17 T40 17" stroke="currentColor" strokeWidth="3.2" fill="none" strokeLinecap="round" />
+          <path d="M4 25 Q10 21 16 25 T28 25 T40 25" stroke="currentColor" strokeWidth="3.2" fill="none" strokeLinecap="round" />
+          <path d="M4 33 Q10 29 16 33 T28 33 T40 33" stroke="currentColor" strokeWidth="3.2" fill="none" strokeLinecap="round" />
+        </svg>
+      );
+    default:
+      return null;
+  }
+}
+
+const NavIcon = ({ name, active }) => {
+  const stroke = active ? "var(--primary)" : "var(--ink-soft)";
+  const common = { width: 22, height: 22, viewBox: "0 0 24 24", fill: "none", stroke, strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" };
+  if (name === "home")
+    return (
+      <svg {...common}>
+        <path d="M3 11.5 12 4l9 7.5" />
+        <path d="M5.5 10v9a1 1 0 0 0 1 1H9a1 1 0 0 0 1-1v-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v4a1 1 0 0 0 1 1h2.5a1 1 0 0 0 1-1v-9" />
+      </svg>
+    );
+  if (name === "history")
+    return (
+      <svg {...common}>
+        <rect x="4" y="5" width="16" height="15" rx="2" />
+        <path d="M4 9.5h16M8 3v3.5M16 3v3.5" />
+        <path d="M8 13h2M8 16h5" />
+      </svg>
+    );
+  return (
+    <svg {...common}>
+      <path d="M4 20V10M11 20V4M18 20v-7" />
+    </svg>
+  );
+};
+
+/* ---------------- storage (localStorage) ---------------- */
+
+const STORAGE_KEY = "bm-entries-v1";
+
+function loadEntries() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistEntries(entries) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/* ---------------- export ---------------- */
+
+function exportToExcel(entries) {
+  if (entries.length === 0) return;
+
+  const rows = entries
+    .slice()
+    .sort((a, b) => a.ts - b.ts)
+    .map((e) => {
+      const meta = typeById(e.type);
+      return {
+        날짜: e.dateKey,
+        시간: koreanTime(e.time),
+        "유형 번호": `Type ${e.type}`,
+        유형명: meta.title,
+        분류: meta.tag,
+        메모: e.note || "",
+      };
+    });
+
+  const sheet = XLSX.utils.json_to_sheet(rows);
+  sheet["!cols"] = [{ wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 24 }, { wch: 12 }, { wch: 28 }];
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "배변 기록");
+
+  const buffer = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
+  const blob = new Blob([buffer], { type: "application/octet-stream" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const today = localDateStr(new Date());
+  a.href = url;
+  a.download = `배변기록_${today}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function ExportIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3v12" />
+      <path d="M7 10l5 5 5-5" />
+      <path d="M4 19h16" />
+    </svg>
+  );
+}
+
+/* ---------------- main app ---------------- */
+
+function App() {
+  const [entries, setEntries] = useState(() => loadEntries().sort((a, b) => b.ts - a.ts));
+  const [tab, setTab] = useState("home");
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [saveError, setSaveError] = useState(false);
+  const idCounter = useRef(0);
+
+  const todayKey = localDateStr(new Date());
+
+  function addEntry(entry) {
+    const next = [entry, ...entries].sort((a, b) => b.ts - a.ts);
+    setEntries(next);
+    setSaveError(!persistEntries(next));
+  }
+
+  function removeEntry(id) {
+    const next = entries.filter((e) => e.id !== id);
+    setEntries(next);
+    setSaveError(!persistEntries(next));
+  }
+
+  const todayEntries = useMemo(() => entries.filter((e) => e.dateKey === todayKey), [entries, todayKey]);
+
+  const streak = useMemo(() => {
+    const keys = new Set(entries.map((e) => e.dateKey));
+    let count = 0;
+    let cursor = new Date();
+    while (true) {
+      const key = localDateStr(cursor);
+      if (keys.has(key)) {
+        count += 1;
+        cursor.setDate(cursor.getDate() - 1);
+      } else {
+        break;
+      }
+    }
+    return count;
+  }, [entries]);
+
+  return (
+    <div className="bm-root">
+      <div className="bm-phone">
+        <div className="bm-content">
+          {tab === "home" ? (
+            <HomeView
+              todayKey={todayKey}
+              todayEntries={todayEntries}
+              streak={streak}
+              onDelete={removeEntry}
+              onOpenSheet={() => setSheetOpen(true)}
+            />
+          ) : tab === "history" ? (
+            <HistoryView entries={entries} onDelete={removeEntry} />
+          ) : (
+            <StatsView entries={entries} />
+          )}
+          {saveError && <div className="bm-save-error">저장에 실패했어요. 브라우저 저장 공간을 확인해 주세요.</div>}
+        </div>
+
+        <button className="bm-fab" onClick={() => setSheetOpen(true)} aria-label="배변 기록 추가">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
+
+        <nav className="bm-tabbar">
+          {[
+            { key: "home", label: "홈" },
+            { key: "history", label: "기록" },
+            { key: "stats", label: "통계" },
+          ].map((t) => (
+            <button key={t.key} className={"bm-tab" + (tab === t.key ? " active" : "")} onClick={() => setTab(t.key)}>
+              <NavIcon name={t.key} active={tab === t.key} />
+              <span>{t.label}</span>
+            </button>
+          ))}
+        </nav>
+      </div>
+
+      {sheetOpen && (
+        <LogSheet
+          onClose={() => setSheetOpen(false)}
+          onSave={(entry) => {
+            idCounter.current += 1;
+            addEntry({ ...entry, id: `${Date.now()}-${idCounter.current}` });
+            setSheetOpen(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ---------------- Home ---------------- */
+
+function HomeView({ todayKey, todayEntries, streak, onDelete, onOpenSheet }) {
+  const last = todayEntries[0];
+  return (
+    <div className="bm-view">
+      <header className="bm-header">
+        <p className="bm-eyebrow">{koreanDate(todayKey)}</p>
+        <h1>오늘의 배변 기록</h1>
+        <div className="bm-summary-row">
+          <div className="bm-summary-chip">
+            <span className="bm-summary-num">{todayEntries.length}</span>
+            <span className="bm-summary-label">오늘 기록</span>
+          </div>
+          <div className="bm-summary-chip">
+            <span className="bm-summary-num">{streak}</span>
+            <span className="bm-summary-label">연속 기록일</span>
+          </div>
+          {last && (
+            <div className="bm-summary-chip">
+              <span className="bm-summary-num">{koreanTime(last.time)}</span>
+              <span className="bm-summary-label">마지막 기록</span>
+            </div>
+          )}
+        </div>
+      </header>
+
+      <button className="bm-cta" onClick={onOpenSheet}>
+        <span className="bm-cta-icon">+</span>
+        배변 기록하기
+      </button>
+
+      <section className="bm-section">
+        <h2>오늘 남긴 기록</h2>
+        {todayEntries.length === 0 ? (
+          <EmptyState text="아직 오늘 기록이 없어요. 첫 기록을 남겨보세요." />
+        ) : (
+          <ul className="bm-list">
+            {todayEntries.map((e) => (
+              <EntryRow key={e.id} entry={e} onDelete={onDelete} />
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function EmptyState({ text }) {
+  return (
+    <div className="bm-empty">
+      <TypeIcon type={4} size={30} />
+      <p>{text}</p>
+    </div>
+  );
+}
+
+function EntryRow({ entry, onDelete }) {
+  const meta = typeById(entry.type);
+  return (
+    <li className="bm-entry">
+      <div className="bm-entry-icon" style={{ color: meta.color, background: "color-mix(in srgb, " + meta.color + " 16%, white)" }}>
+        <TypeIcon type={entry.type} size={22} />
+      </div>
+      <div className="bm-entry-body">
+        <div className="bm-entry-top">
+          <span className="bm-entry-time">{koreanTime(entry.time)}</span>
+          <span className="bm-entry-tag" style={{ color: meta.color }}>{meta.tag}</span>
+        </div>
+        <p className="bm-entry-title">{meta.title}</p>
+        {entry.note && <p className="bm-entry-note">{entry.note}</p>}
+      </div>
+      <button className="bm-entry-del" onClick={() => onDelete(entry.id)} aria-label="기록 삭제">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+          <path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-8 0 1 13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1l1-13" />
+        </svg>
+      </button>
+    </li>
+  );
+}
+
+/* ---------------- History ---------------- */
+
+function HistoryView({ entries, onDelete }) {
+  const groups = useMemo(() => {
+    const map = new Map();
+    for (const e of entries) {
+      if (!map.has(e.dateKey)) map.set(e.dateKey, []);
+      map.get(e.dateKey).push(e);
+    }
+    return Array.from(map.entries()).sort((a, b) => (a[0] < b[0] ? 1 : -1));
+  }, [entries]);
+
+  return (
+    <div className="bm-view">
+      <header className="bm-header slim">
+        <div className="bm-header-row">
+          <h1>전체 기록</h1>
+          <button className="bm-export-btn" onClick={() => exportToExcel(entries)} disabled={entries.length === 0}>
+            <ExportIcon />
+            엑셀로 내보내기
+          </button>
+        </div>
+        <p className="bm-sub">총 {entries.length}개의 기록 · {groups.length}일 동안 기록함</p>
+      </header>
+
+      {groups.length === 0 ? (
+        <EmptyState text="아직 기록이 없어요. 홈에서 첫 기록을 남겨보세요." />
+      ) : (
+        groups.map(([dateKey, list]) => (
+          <section className="bm-section" key={dateKey}>
+            <h2>{koreanDate(dateKey)} · {list.length}회</h2>
+            <ul className="bm-list">
+              {list
+                .slice()
+                .sort((a, b) => b.ts - a.ts)
+                .map((e) => (
+                  <EntryRow key={e.id} entry={e} onDelete={onDelete} />
+                ))}
+            </ul>
+          </section>
+        ))
+      )}
+    </div>
+  );
+}
+
+/* ---------------- Stats ---------------- */
+
+function StatsView({ entries }) {
+  const last7 = useMemo(() => {
+    const days = [];
+    const cursor = new Date();
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(cursor);
+      d.setDate(cursor.getDate() - i);
+      const key = localDateStr(d);
+      const count = entries.filter((e) => e.dateKey === key).length;
+      days.push({ key, count, label: WEEKDAYS[d.getDay()] });
+    }
+    return days;
+  }, [entries]);
+
+  const maxCount = Math.max(1, ...last7.map((d) => d.count));
+
+  const distribution = useMemo(() => {
+    const counts = TYPE_META.map((t) => ({ ...t, count: entries.filter((e) => e.type === t.id).length }));
+    const total = entries.length || 1;
+    return counts.map((c) => ({ ...c, pct: Math.round((c.count / total) * 100) }));
+  }, [entries]);
+
+  const avgTime = useMemo(() => {
+    if (entries.length === 0) return null;
+    const avgMin = Math.round(entries.reduce((sum, e) => sum + minutesOf(e.time), 0) / entries.length);
+    return koreanTime(`${pad(Math.floor(avgMin / 60))}:${pad(avgMin % 60)}`);
+  }, [entries]);
+
+  const trackedDays = useMemo(() => new Set(entries.map((e) => e.dateKey)).size, [entries]);
+
+  if (entries.length === 0) {
+    return (
+      <div className="bm-view">
+        <header className="bm-header slim">
+          <h1>통계</h1>
+        </header>
+        <EmptyState text="기록이 쌓이면 여기에서 패턴을 볼 수 있어요." />
+      </div>
+    );
+  }
+
+  return (
+    <div className="bm-view">
+      <header className="bm-header slim">
+        <h1>통계</h1>
+        <p className="bm-sub">지금까지 {entries.length}개의 기록 · {trackedDays}일 동안 기록함</p>
+      </header>
+
+      <section className="bm-section">
+        <h2>최근 7일 빈도</h2>
+        <div className="bm-bar-chart">
+          {last7.map((d) => (
+            <div className="bm-bar-col" key={d.key}>
+              <div className="bm-bar-track">
+                <div className="bm-bar-fill" style={{ height: `${Math.max(6, (d.count / maxCount) * 100)}%` }} title={`${d.count}회`} />
+              </div>
+              <span className="bm-bar-count">{d.count}</span>
+              <span className="bm-bar-label">{d.label}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="bm-section">
+        <h2>모양 분포</h2>
+        <div className="bm-dist">
+          {distribution
+            .filter((d) => d.count > 0)
+            .map((d) => (
+              <div className="bm-dist-row" key={d.id}>
+                <div className="bm-dist-icon" style={{ color: d.color }}>
+                  <TypeIcon type={d.id} size={18} />
+                </div>
+                <div className="bm-dist-bar-track">
+                  <div className="bm-dist-bar-fill" style={{ width: `${d.pct}%`, background: d.color }} />
+                </div>
+                <span className="bm-dist-pct">{d.pct}%</span>
+              </div>
+            ))}
+        </div>
+      </section>
+
+      <section className="bm-section">
+        <h2>요약</h2>
+        <div className="bm-summary-row">
+          <div className="bm-summary-chip">
+            <span className="bm-summary-num">{avgTime}</span>
+            <span className="bm-summary-label">평균 시간</span>
+          </div>
+          <div className="bm-summary-chip">
+            <span className="bm-summary-num">{trackedDays}</span>
+            <span className="bm-summary-label">기록한 날</span>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+/* ---------------- Log sheet ---------------- */
+
+function LogSheet({ onClose, onSave }) {
+  const now = new Date();
+  const [type, setType] = useState(null);
+  const [date, setDate] = useState(localDateStr(now));
+  const [time, setTime] = useState(localTimeStr(now));
+  const [note, setNote] = useState("");
+
+  function handleSave() {
+    if (!type) return;
+    const ts = new Date(`${date}T${time}:00`).getTime();
+    onSave({ type, dateKey: date, time, note: note.trim(), ts });
+  }
+
+  return (
+    <div className="bm-overlay" onClick={onClose}>
+      <div className="bm-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="bm-sheet-handle" />
+        <h2 className="bm-sheet-title">배변 기록하기</h2>
+
+        <p className="bm-field-label">모양 선택 (브리스톨 대변 척도)</p>
+        <div className="bm-type-grid">
+          {TYPE_META.map((t) => (
+            <button
+              key={t.id}
+              className={"bm-type-card" + (type === t.id ? " selected" : "")}
+              style={{ "--type-color": t.color }}
+              onClick={() => setType(t.id)}
+            >
+              <div className="bm-type-icon" style={{ color: t.color }}>
+                <TypeIcon type={t.id} size={26} />
+              </div>
+              <span className="bm-type-num">Type {t.id}</span>
+              <span className="bm-type-title">{t.title}</span>
+              <span className="bm-type-tag" style={{ color: t.color }}>{t.tag}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="bm-field-row">
+          <div className="bm-field">
+            <label className="bm-field-label" htmlFor="bm-date">날짜</label>
+            <input id="bm-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          </div>
+          <div className="bm-field">
+            <label className="bm-field-label" htmlFor="bm-time">시간</label>
+            <input id="bm-time" type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+          </div>
+        </div>
+
+        <div className="bm-field">
+          <label className="bm-field-label" htmlFor="bm-note">메모 (선택)</label>
+          <input
+            id="bm-note"
+            type="text"
+            placeholder="예: 커피 마신 후, 속이 편함"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            maxLength={60}
+          />
+        </div>
+
+        <div className="bm-sheet-actions">
+          <button className="bm-btn-secondary" onClick={onClose}>취소</button>
+          <button className="bm-btn-primary" onClick={handleSave} disabled={!type}>저장</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App />);
+</script>
+
+<style>
+:root{
+  --bg:#EEF1E9;
+  --surface:#FFFFFF;
+  --surface-alt:#F6F7F1;
+  --ink:#1B241D;
+  --ink-soft:#657266;
+  --line:#DEE4D6;
+  --primary:#2F5233;
+  --primary-soft:#E3EBDD;
+  --danger:#B3453A;
+  --s1:#8C6239; --s2:#A9824F; --s3:#7C9463; --s4:#3F6B4A; --s5:#C9A227; --s6:#CB7C4A; --s7:#C1503C;
+}
+*{ box-sizing:border-box; }
+.bm-root{
+  font-family:"Apple SD Gothic Neo","Noto Sans KR",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  color:var(--ink);
+  display:flex; justify-content:center;
+  min-height:100dvh;
+  background:var(--bg);
+}
+.bm-phone{
+  width:100%; max-width:430px;
+  min-height:100dvh;
+  background:var(--bg);
+  display:flex; flex-direction:column;
+  position:relative;
+  box-shadow:0 0 40px rgba(0,0,0,0.06);
+}
+.bm-content{
+  flex:1; overflow-y:auto;
+  padding:calc(20px + env(safe-area-inset-top)) 18px 96px;
+}
+
+.bm-view{ display:flex; flex-direction:column; gap:22px; }
+
+.bm-header h1{ margin:2px 0 14px; font-size:1.5rem; font-weight:700; letter-spacing:-0.01em; }
+.bm-header.slim h1{ margin-bottom:4px; }
+.bm-eyebrow{ margin:0; font-size:0.85rem; color:var(--ink-soft); font-weight:500; }
+.bm-sub{ margin:0 0 6px; font-size:0.85rem; color:var(--ink-soft); }
+
+.bm-header-row{ display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+.bm-export-btn{
+  display:flex; align-items:center; gap:5px; flex-shrink:0;
+  border:1px solid var(--line); background:var(--surface); color:var(--ink);
+  border-radius:10px; padding:7px 10px; font-size:0.72rem; font-weight:600;
+  cursor:pointer; margin-top:2px;
+}
+.bm-export-btn:disabled{ color:var(--ink-soft); cursor:not-allowed; }
+
+.bm-summary-row{ display:flex; gap:10px; flex-wrap:wrap; }
+.bm-summary-chip{
+  flex:1; min-width:86px;
+  background:var(--surface);
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:10px 12px;
+  display:flex; flex-direction:column; gap:2px;
+}
+.bm-summary-num{ font-size:1.15rem; font-weight:700; font-variant-numeric:tabular-nums; }
+.bm-summary-label{ font-size:0.72rem; color:var(--ink-soft); }
+
+.bm-cta{
+  display:flex; align-items:center; justify-content:center; gap:8px;
+  width:100%; border:none; cursor:pointer;
+  background:var(--primary); color:white;
+  padding:15px; border-radius:16px;
+  font-size:1rem; font-weight:600;
+  box-shadow:0 8px 20px rgba(47,82,51,0.28);
+}
+.bm-cta:active{ transform:translateY(1px); }
+.bm-cta-icon{ font-size:1.2rem; line-height:1; }
+
+.bm-section h2{ margin:0 0 10px; font-size:0.92rem; font-weight:700; color:var(--ink); }
+
+.bm-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:10px; }
+.bm-entry{
+  display:flex; gap:12px; align-items:flex-start;
+  background:var(--surface); border:1px solid var(--line);
+  border-radius:14px; padding:12px;
+}
+.bm-entry-icon{
+  width:40px; height:40px; border-radius:10px;
+  display:flex; align-items:center; justify-content:center;
+  flex-shrink:0;
+}
+.bm-entry-body{ flex:1; min-width:0; }
+.bm-entry-top{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.bm-entry-time{ font-weight:700; font-size:0.9rem; font-variant-numeric:tabular-nums; }
+.bm-entry-tag{ font-size:0.72rem; font-weight:600; }
+.bm-entry-title{ margin:3px 0 0; font-size:0.85rem; color:var(--ink); }
+.bm-entry-note{ margin:4px 0 0; font-size:0.78rem; color:var(--ink-soft); }
+.bm-entry-del{
+  border:none; background:none; cursor:pointer; color:var(--ink-soft);
+  padding:4px; flex-shrink:0;
+}
+.bm-entry-del:hover{ color:var(--danger); }
+
+.bm-empty{
+  display:flex; flex-direction:column; align-items:center; gap:8px;
+  padding:34px 20px; color:var(--ink-soft);
+  background:var(--surface-alt); border-radius:16px;
+  text-align:center; font-size:0.85rem;
+}
+.bm-empty svg{ color:var(--primary); opacity:0.5; }
+
+.bm-save-error{
+  margin-top:14px; padding:10px 12px; border-radius:10px;
+  background:#FBEAE7; color:var(--danger); font-size:0.8rem;
+}
+
+.bm-fab{
+  position:absolute; right:18px; bottom:88px;
+  width:54px; height:54px; border-radius:50%;
+  background:var(--primary); border:none; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  box-shadow:0 10px 22px rgba(47,82,51,0.35);
+}
+
+.bm-tabbar{
+  position:sticky; bottom:0;
+  display:flex; background:var(--surface);
+  border-top:1px solid var(--line);
+  padding:8px 10px calc(8px + env(safe-area-inset-bottom));
+}
+.bm-tab{
+  flex:1; display:flex; flex-direction:column; align-items:center; gap:3px;
+  border:none; background:none; cursor:pointer;
+  padding:6px 0; color:var(--ink-soft); font-size:0.7rem;
+}
+.bm-tab.active{ color:var(--primary); font-weight:600; }
+
+.bm-bar-chart{ display:flex; gap:8px; align-items:flex-end; background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px 14px 12px; height:150px; }
+.bm-bar-col{ flex:1; display:flex; flex-direction:column; align-items:center; height:100%; gap:4px; }
+.bm-bar-track{ flex:1; width:100%; display:flex; align-items:flex-end; }
+.bm-bar-fill{ width:100%; background:var(--primary); border-radius:6px 6px 3px 3px; min-height:6px; }
+.bm-bar-count{ font-size:0.72rem; font-weight:700; }
+.bm-bar-label{ font-size:0.68rem; color:var(--ink-soft); }
+
+.bm-dist{ display:flex; flex-direction:column; gap:10px; background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:14px; }
+.bm-dist-row{ display:flex; align-items:center; gap:10px; }
+.bm-dist-icon{ flex-shrink:0; width:20px; }
+.bm-dist-bar-track{ flex:1; height:8px; border-radius:4px; background:var(--surface-alt); overflow:hidden; }
+.bm-dist-bar-fill{ height:100%; border-radius:4px; }
+.bm-dist-pct{ font-size:0.75rem; font-weight:600; width:34px; text-align:right; color:var(--ink-soft); }
+
+.bm-overlay{
+  position:fixed; inset:0; background:rgba(20,26,20,0.45);
+  display:flex; align-items:flex-end; justify-content:center;
+  z-index:50;
+}
+.bm-sheet{
+  width:100%; max-width:430px; max-height:88dvh; overflow-y:auto;
+  background:var(--bg); border-radius:22px 22px 0 0;
+  padding:10px 18px calc(20px + env(safe-area-inset-bottom));
+  animation:bm-slide-up 0.24s ease-out;
+}
+@keyframes bm-slide-up{ from{ transform:translateY(24px); opacity:0.4; } to{ transform:translateY(0); opacity:1; } }
+.bm-sheet-handle{ width:36px; height:4px; border-radius:2px; background:var(--line); margin:4px auto 14px; }
+.bm-sheet-title{ margin:0 0 16px; font-size:1.15rem; font-weight:700; }
+
+.bm-field-label{ font-size:0.78rem; color:var(--ink-soft); font-weight:600; margin:0 0 6px; display:block; }
+
+.bm-type-grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:18px; }
+.bm-type-card{
+  display:flex; flex-direction:column; align-items:flex-start; gap:3px;
+  text-align:left; border-radius:14px; border:1.5px solid var(--line);
+  background:var(--surface); padding:10px; cursor:pointer;
+}
+.bm-type-card.selected{ border-color:var(--type-color); background:color-mix(in srgb, var(--type-color) 10%, white); }
+.bm-type-num{ font-size:0.68rem; color:var(--ink-soft); font-weight:600; }
+.bm-type-title{ font-size:0.78rem; font-weight:600; line-height:1.25; }
+.bm-type-tag{ font-size:0.68rem; font-weight:600; }
+
+.bm-field-row{ display:flex; gap:10px; margin-bottom:14px; }
+.bm-field{ flex:1; margin-bottom:14px; }
+.bm-field-row .bm-field{ margin-bottom:0; }
+.bm-field input{
+  width:100%; box-sizing:border-box;
+  border:1.5px solid var(--line); border-radius:12px;
+  padding:10px 12px; font-size:0.9rem; background:var(--surface); color:var(--ink);
+  font-family:inherit;
+}
+.bm-field input:focus{ outline:2px solid var(--primary); outline-offset:1px; }
+
+.bm-sheet-actions{ display:flex; gap:10px; margin-top:4px; }
+.bm-btn-secondary, .bm-btn-primary{
+  flex:1; padding:13px; border-radius:14px; border:none; cursor:pointer;
+  font-size:0.92rem; font-weight:600;
+}
+.bm-btn-secondary{ background:var(--surface-alt); color:var(--ink); }
+.bm-btn-primary{ background:var(--primary); color:white; }
+.bm-btn-primary:disabled{ background:var(--line); color:var(--ink-soft); cursor:not-allowed; }
+
+@media (prefers-reduced-motion: reduce){
+  .bm-sheet{ animation:none; }
+}
+</style>
+</body>
+</html>
